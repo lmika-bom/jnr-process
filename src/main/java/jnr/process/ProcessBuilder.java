@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import jnr.constants.platform.Sysconf;
+import jnr.posix.FileStat;
 import jnr.posix.POSIX;
 import jnr.posix.POSIXFactory;
 import jnr.posix.SpawnFileAction;
@@ -72,16 +74,34 @@ public class ProcessBuilder {
             envp.add(entry.getKey() + "=" + entry.getValue());
         }
 
+        List<SpawnFileAction> spawnFileActions = new ArrayList<SpawnFileAction>();
+        spawnFileActions.addAll(Arrays.asList(
+                SpawnFileAction.dup(stdin[0], 0),
+                SpawnFileAction.dup(stdout[1], 1),
+                SpawnFileAction.dup(stderr[1], 2),
+                SpawnFileAction.close(stdin[1]),
+                SpawnFileAction.close(stdout[0]),
+                SpawnFileAction.close(stderr[0])));
+
+        // Close all other file descriptors
+        long maxOpenFiles = posix.sysconf(Sysconf._SC_OPEN_MAX);
+        FileStat fileStat = posix.allocateStat();
+        for (int fd = 3; fd < maxOpenFiles; fd++) {
+            try {
+                if (posix.fstat(fd, fileStat) == 0) {
+                    if (fileStat.isSocket()) {
+                        spawnFileActions.add(SpawnFileAction.close(fd));
+                    }
+                }
+            } catch (RuntimeException e) {
+                // Ignore
+            }
+        }
+
         // spawn process, closing parent's descriptors in child
         long pid = posix.posix_spawnp(
                 command.get(0),
-                Arrays.asList(
-                        SpawnFileAction.dup(stdin[0], 0),
-                        SpawnFileAction.dup(stdout[1], 1),
-                        SpawnFileAction.dup(stderr[1], 2),
-                        SpawnFileAction.close(stdin[1]),
-                        SpawnFileAction.close(stdout[0]),
-                        SpawnFileAction.close(stderr[0])),
+                spawnFileActions,
                 command,
                 envp);
 
